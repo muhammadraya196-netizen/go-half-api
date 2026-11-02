@@ -19,6 +19,7 @@ func BadRequest(message string) error { return &Error{Status: 400, Message: mess
 func Unauthorized(message string) error {
 	return &Error{Status: 401, Message: message}
 }
+func Forbidden(message string) error { return &Error{Status: 403, Message: message} }
 func NotFound(message string) error { return &Error{Status: 404, Message: message} }
 func Conflict(message string) error { return &Error{Status: 409, Message: message} }
 

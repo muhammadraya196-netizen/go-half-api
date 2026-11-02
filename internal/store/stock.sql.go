@@ -271,7 +271,7 @@ func (q *Queries) ListStockMovements(ctx context.Context, arg ListStockMovements
 }
 
 const lockProduct = `-- name: LockProduct :one
-SELECT p.id, p.name, p.stock, c.name AS category_name
+SELECT p.id, p.name, p.stock, p.warehouse_stock, p.sku, p.min_stock, p.store_listed, c.name AS category_name
 FROM products p
 JOIN categories c ON c.id = p.category_id
 WHERE p.id = $1
@@ -279,10 +279,14 @@ FOR UPDATE OF p
 `
 
 type LockProductRow struct {
-	ID           string `db:"id"`
-	Name         string `db:"name"`
-	Stock        int32  `db:"stock"`
-	CategoryName string `db:"category_name"`
+	ID             string `db:"id"`
+	Name           string `db:"name"`
+	Stock          int32  `db:"stock"`
+	WarehouseStock int32  `db:"warehouse_stock"`
+	SKU            string `db:"sku"`
+	MinStock       int32  `db:"min_stock"`
+	StoreListed    bool   `db:"store_listed"`
+	CategoryName   string `db:"category_name"`
 }
 
 func (q *Queries) LockProduct(ctx context.Context, id string) (LockProductRow, error) {
@@ -292,6 +296,10 @@ func (q *Queries) LockProduct(ctx context.Context, id string) (LockProductRow, e
 		&i.ID,
 		&i.Name,
 		&i.Stock,
+		&i.WarehouseStock,
+		&i.SKU,
+		&i.MinStock,
+		&i.StoreListed,
 		&i.CategoryName,
 	)
 	return i, err
@@ -372,4 +380,83 @@ type UpdateProductStockParams struct {
 func (q *Queries) UpdateProductStock(ctx context.Context, arg UpdateProductStockParams) error {
 	_, err := q.db.Exec(ctx, updateProductStock, arg.Stock, arg.ID)
 	return err
+}
+
+const updateProductWarehouseStock = `-- name: UpdateProductWarehouseStock :exec
+UPDATE products
+SET warehouse_stock = $1, updated_at = now()
+WHERE id = $2
+`
+
+func (q *Queries) UpdateProductWarehouseStock(ctx context.Context, stock int32, id string) error {
+	_, err := q.db.Exec(ctx, updateProductWarehouseStock, stock, id)
+	return err
+}
+
+const insertStockMovementExtended = `-- name: InsertStockMovementExtended :one
+INSERT INTO stock_movements (
+  id, transaction_number, movement_type, product_id, product_name, category_name,
+  supplier_id, supplier_name, unit_code, quantity, stock_before, stock_after,
+  purchase_price, reason, note, officer_id, officer_name,
+  location_from, location_to, movement_kind, reference_id
+) VALUES (
+  $1, $2, $3, $4, $5, $6,
+  $7, $8, $9, $10, $11, $12,
+  $13, $14, $15, $16, $17,
+  $18, $19, $20, $21
+)
+RETURNING created_at, total_price
+`
+
+type InsertStockMovementExtendedParams struct {
+	ID                string
+	TransactionNumber string
+	MovementType      string
+	ProductID         string
+	ProductName       string
+	CategoryName      string
+	SupplierID        *string
+	SupplierName      *string
+	UnitCode          *string
+	Quantity          int32
+	StockBefore       int32
+	StockAfter        int32
+	PurchasePrice     *int64
+	Reason            *string
+	Note              *string
+	OfficerID         string
+	OfficerName       string
+	LocationFrom      *string
+	LocationTo        *string
+	MovementKind      *string
+	ReferenceID       *string
+}
+
+func (q *Queries) InsertStockMovementExtended(ctx context.Context, arg InsertStockMovementExtendedParams) (InsertStockMovementRow, error) {
+	row := q.db.QueryRow(ctx, insertStockMovementExtended,
+		arg.ID,
+		arg.TransactionNumber,
+		arg.MovementType,
+		arg.ProductID,
+		arg.ProductName,
+		arg.CategoryName,
+		arg.SupplierID,
+		arg.SupplierName,
+		arg.UnitCode,
+		arg.Quantity,
+		arg.StockBefore,
+		arg.StockAfter,
+		arg.PurchasePrice,
+		arg.Reason,
+		arg.Note,
+		arg.OfficerID,
+		arg.OfficerName,
+		arg.LocationFrom,
+		arg.LocationTo,
+		arg.MovementKind,
+		arg.ReferenceID,
+	)
+	var i InsertStockMovementRow
+	err := row.Scan(&i.CreatedAt, &i.TotalPrice)
+	return i, err
 }

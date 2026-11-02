@@ -23,7 +23,7 @@ var paymentMethods = map[string]struct{}{
 }
 
 var roles = map[string]struct{}{
-	"admin": {}, "finance": {}, "cashier": {}, "manager": {},
+	"admin": {}, "finance": {}, "cashier": {}, "manager": {}, "supervisor": {}, "pic_gudang": {},
 }
 
 var userStatuses = map[string]struct{}{
@@ -32,6 +32,8 @@ var userStatuses = map[string]struct{}{
 
 var stockReasons = map[string]struct{}{
 	"Penjualan": {}, "Produk Rusak": {}, "Kadaluarsa": {}, "Sampel": {}, "Retur": {}, "Lainnya": {},
+	"Produk Kedaluwarsa": {}, "Kemasan Rusak": {}, "Produk Tidak Layak Jual": {}, "Kerusakan Lainnya": {},
+	"Transfer Gudang ke Toko": {}, "Penyesuaian Stok Toko": {}, "Penyesuaian Stok Gudang": {},
 }
 
 func chiID(r *http.Request) string {

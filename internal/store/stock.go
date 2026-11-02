@@ -84,7 +84,7 @@ func (s *Store) CreateStockMovement(ctx context.Context, in domain.StockInput) (
 			supplierID = &supplier.ID
 			supplierName = &supplier.Name
 		} else if int64(in.Quantity) > int64(product.Stock) {
-			return BadRequest(fmt.Sprintf("Stok tidak mencukupi. Stok tersedia: %d", product.Stock))
+			return BadRequest(fmt.Sprintf("Stok toko tidak mencukupi. Stok tersedia: %d", product.Stock))
 		}
 		if in.Type == "out" && in.Reason == "" {
 			return BadRequest("Alasan stok keluar wajib dipilih")
@@ -102,15 +102,27 @@ func (s *Store) CreateStockMovement(ctx context.Context, in domain.StockInput) (
 			unitCode = &code
 		}
 
-		before := product.Stock
-		after := before + in.Quantity
+		// Stok masuk supplier → Stok Gudang. Stok keluar (rusak/sampel/dll) → Stok Toko.
+		var before, after int32
+		var locFrom, locTo, kind *string
 		prefixKind := "STI"
-		if in.Type == "out" {
+		if in.Type == "in" {
+			before = product.WarehouseStock
+			after = before + in.Quantity
+			locTo = strPtr("warehouse")
+			kind = strPtr("WAREHOUSE_IN")
+			if err := q.UpdateProductWarehouseStock(ctx, after, product.ID); err != nil {
+				return err
+			}
+		} else {
+			before = product.Stock
 			after = before - in.Quantity
 			prefixKind = "STO"
-		}
-		if err := q.UpdateProductStock(ctx, UpdateProductStockParams{Stock: after, ID: product.ID}); err != nil {
-			return err
+			locFrom = strPtr("store")
+			kind = strPtr(damageMovementKind(in.Reason))
+			if err := q.UpdateProductStock(ctx, UpdateProductStockParams{Stock: after, ID: product.ID}); err != nil {
+				return err
+			}
 		}
 		prefix, err := dailyPrefix(prefixKind, time.Now())
 		if err != nil {
@@ -126,13 +138,14 @@ func (s *Store) CreateStockMovement(ctx context.Context, in domain.StockInput) (
 			reason = &in.Reason
 		}
 		movementID := newID("stk-")
-		inserted, err := q.InsertStockMovement(ctx, InsertStockMovementParams{
+		inserted, err := q.InsertStockMovementExtended(ctx, InsertStockMovementExtendedParams{
 			ID: movementID, TransactionNumber: number, MovementType: in.Type,
 			ProductID: product.ID, ProductName: product.Name, CategoryName: product.CategoryName,
 			SupplierID: supplierID, SupplierName: supplierName, UnitCode: unitCode,
 			Quantity: in.Quantity, StockBefore: before, StockAfter: after,
 			PurchasePrice: in.PurchasePrice, Reason: reason, Note: blank(in.Note),
 			OfficerID: in.OfficerID, OfficerName: in.OfficerName,
+			LocationFrom: locFrom, LocationTo: locTo, MovementKind: kind,
 		})
 		if err != nil {
 			if isForeignKey(err) {
@@ -158,6 +171,20 @@ func (s *Store) CreateStockMovement(ctx context.Context, in domain.StockInput) (
 		return nil
 	})
 	return created, err
+}
+
+func strPtr(v string) *string { return &v }
+
+func damageMovementKind(reason string) string {
+	switch reason {
+	case "Produk Rusak", "Kadaluarsa", "Produk Kedaluwarsa", "Kemasan Rusak",
+		"Produk Tidak Layak Jual", "Kerusakan Lainnya":
+		return "STOK_RUSAK"
+	case "Penjualan":
+		return "SALE"
+	default:
+		return "STORE_OUT"
+	}
 }
 
 func (s *Store) StockOverview(ctx context.Context) (domain.StockOverview, error) {

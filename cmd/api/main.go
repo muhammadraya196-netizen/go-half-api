@@ -31,10 +31,9 @@ func main() {
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: (&httpapi.Server{
-			Store:    db,
-			Secret:   cfg.TokenSecret,
-			TokenTTL: cfg.TokenTTL,
-			Timeout:  cfg.RequestTimeout,
+			Store:       db,
+			Timeout:     cfg.RequestTimeout,
+			TokenSecret: cfg.TokenSecret,
 		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       20 * time.Second,

@@ -5,14 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"halfpos/internal/auth"
 	"halfpos/internal/domain"
 )
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
-	actor, _ := actorFrom(r.Context())
-	if !auth.CanViewUsers(actor.Role) {
-		writeMessage(w, http.StatusForbidden, "Anda tidak memiliki akses ke Manajemen User")
+	if _, ok := s.requireUsersViewer(w, r); !ok {
 		return
 	}
 	_, limit, offset, err := pageLimit(r)
@@ -60,9 +57,8 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
-	actor, _ := actorFrom(r.Context())
-	if !auth.CanMutateUsers(actor.Role) {
-		writeMessage(w, http.StatusForbidden, "Hanya Admin yang dapat menambah user")
+	actor, ok := s.requireAdminActor(w, r)
+	if !ok {
 		return
 	}
 	var body userBody
@@ -80,19 +76,21 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	_ = s.Store.WriteAccessAudit(r.Context(), user.ID, actor.ID, actor.Name, "create_user", "role="+user.Role)
 	writeJSON(w, http.StatusCreated, userToJSON(user))
 }
 
 type userBody struct {
-	Name            string `json:"name"`
-	Username        string `json:"username"`
-	Email           string `json:"email"`
-	Phone           string `json:"phone"`
-	Password        string `json:"password"`
-	ConfirmPassword string `json:"confirmPassword"`
-	Role            string `json:"role"`
-	Status          string `json:"status"`
-	Avatar          string `json:"avatar"`
+	Name            string   `json:"name"`
+	Username        string   `json:"username"`
+	Email           string   `json:"email"`
+	Phone           string   `json:"phone"`
+	Password        string   `json:"password"`
+	ConfirmPassword string   `json:"confirmPassword"`
+	Role            string   `json:"role"`
+	Status          string   `json:"status"`
+	Avatar          string   `json:"avatar"`
+	MenuAccess      []string `json:"menuAccess"`
 }
 
 func validateCreateUser(body userBody) (domain.CreateUserInput, string) {
@@ -112,6 +110,7 @@ func validateCreateUser(body userBody) (domain.CreateUserInput, string) {
 	return domain.CreateUserInput{
 		Name: in.Name, Username: in.Username, Email: in.Email, Phone: body.Phone,
 		Role: in.Role, Status: in.Status, Avatar: body.Avatar, Password: body.Password,
+		MenuAccess: body.MenuAccess,
 	}, ""
 }
 
@@ -147,13 +146,12 @@ func validateUserFields(body userBody, creating bool) (domain.UpdateUserInput, s
 	return domain.UpdateUserInput{
 		Name: name, Username: username, Email: email, Phone: body.Phone,
 		Role: body.Role, Status: body.Status, Avatar: body.Avatar,
+		MenuAccess: body.MenuAccess,
 	}, ""
 }
 
 func (s *Server) getUser(w http.ResponseWriter, r *http.Request) {
-	actor, _ := actorFrom(r.Context())
-	if !auth.CanViewUsers(actor.Role) {
-		writeMessage(w, http.StatusForbidden, "Akses ditolak")
+	if _, ok := s.requireUsersViewer(w, r); !ok {
 		return
 	}
 	limit := int32(100)
@@ -208,9 +206,8 @@ type cursorError string
 func (e cursorError) Error() string { return string(e) }
 
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
-	actor, _ := actorFrom(r.Context())
-	if !auth.CanMutateUsers(actor.Role) {
-		writeMessage(w, http.StatusForbidden, "Hanya Admin yang dapat mengubah user")
+	actor, ok := s.requireAdminActor(w, r)
+	if !ok {
 		return
 	}
 	var body userBody
@@ -235,29 +232,22 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	id := chiID(r)
-	if in.Status == "inactive" && actor.UserID == id {
-		current, err := s.Store.UserStatus(r.Context(), id)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		if current == "active" {
-			writeMessage(w, http.StatusBadRequest, "Tidak dapat menonaktifkan akun sendiri")
-			return
-		}
+	if id == actor.ID {
+		writeMessage(w, http.StatusForbidden, "Tidak dapat mengubah role atau hak akses akun sendiri")
+		return
 	}
 	user, err := s.Store.UpdateUser(r.Context(), id, in, password)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	_ = s.Store.WriteAccessAudit(r.Context(), user.ID, actor.ID, actor.Name, "update_user", "role="+user.Role)
 	writeJSON(w, http.StatusOK, userToJSON(user))
 }
 
 func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
-	actor, _ := actorFrom(r.Context())
-	if !auth.CanMutateUsers(actor.Role) {
-		writeMessage(w, http.StatusForbidden, "Hanya Admin yang dapat melakukan aksi ini")
+	actor, ok := s.requireAdminActor(w, r)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -269,6 +259,10 @@ func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chiID(r)
+	if id == actor.ID && body.Action == "toggle-status" {
+		writeMessage(w, http.StatusForbidden, "Tidak dapat menonaktifkan akun sendiri")
+		return
+	}
 	switch body.Action {
 	case "reset-password":
 		if len(body.Password) < 8 {
@@ -280,15 +274,12 @@ func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
+		_ = s.Store.WriteAccessAudit(r.Context(), user.ID, actor.ID, actor.Name, "reset_password", "")
 		writeJSON(w, http.StatusOK, userToJSON(user))
 	case "toggle-status":
 		current, err := s.Store.UserStatus(r.Context(), id)
 		if err != nil {
 			writeError(w, err)
-			return
-		}
-		if current == "active" && actor.UserID == id {
-			writeMessage(w, http.StatusBadRequest, "Tidak dapat menonaktifkan akun sendiri")
 			return
 		}
 		next := "active"
@@ -300,6 +291,7 @@ func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
+		_ = s.Store.WriteAccessAudit(r.Context(), user.ID, actor.ID, actor.Name, "toggle_status", "status="+next)
 		writeJSON(w, http.StatusOK, userToJSON(user))
 	default:
 		writeMessage(w, http.StatusBadRequest, "Aksi tidak dikenal")
@@ -307,19 +299,19 @@ func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
-	actor, _ := actorFrom(r.Context())
-	if !auth.CanMutateUsers(actor.Role) {
-		writeMessage(w, http.StatusForbidden, "Hanya Admin yang dapat menghapus user")
+	actor, ok := s.requireAdminActor(w, r)
+	if !ok {
 		return
 	}
 	id := chiID(r)
-	if actor.UserID == id {
-		writeMessage(w, http.StatusBadRequest, "Tidak dapat menghapus akun sendiri")
+	if id == actor.ID {
+		writeMessage(w, http.StatusForbidden, "Tidak dapat menghapus akun sendiri")
 		return
 	}
 	if err := s.Store.DeleteUser(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
 	}
+	_ = s.Store.WriteAccessAudit(r.Context(), id, actor.ID, actor.Name, "delete_user", "")
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }

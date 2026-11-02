@@ -9,6 +9,7 @@ type Product struct {
 	Description        string
 	Price              int64
 	Stock              int32
+	WarehouseStock     int32
 	Category           string
 	Image              *string
 	Rating             *float64
@@ -58,16 +59,17 @@ type ProductInput struct {
 }
 
 type ManagedUser struct {
-	ID        string
-	Name      string
-	Username  string
-	Email     string
-	Phone     *string
-	Role      string
-	Status    string
-	Avatar    *string
-	CreatedAt time.Time
-	LastLogin *time.Time
+	ID         string
+	Name       string
+	Username   string
+	Email      string
+	Phone      *string
+	Role       string
+	Status     string
+	Avatar     *string
+	MenuAccess []string
+	CreatedAt  time.Time
+	LastLogin  *time.Time
 }
 
 type UserActivity struct {
@@ -102,31 +104,35 @@ type UserDetail struct {
 }
 
 type CreateUserInput struct {
-	Name     string
-	Username string
-	Email    string
-	Phone    string
-	Role     string
-	Status   string
-	Avatar   string
-	Password string
+	Name       string
+	Username   string
+	Email      string
+	Phone      string
+	Role       string
+	Status     string
+	Avatar     string
+	Password   string
+	MenuAccess []string
 }
 
 type UpdateUserInput struct {
-	Name     string
-	Username string
-	Email    string
-	Phone    string
-	Role     string
-	Status   string
-	Avatar   string
+	Name       string
+	Username   string
+	Email      string
+	Phone      string
+	Role       string
+	Status     string
+	Avatar     string
+	MenuAccess []string
 }
 
 type AuthUser struct {
-	ID    string
-	Name  string
-	Email string
-	Role  string
+	ID         string
+	Name       string
+	Email      string
+	Username   string
+	Role       string
+	MenuAccess []string
 }
 
 type OrderItem struct {

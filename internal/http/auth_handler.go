@@ -11,19 +11,23 @@ import (
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`
+		Username string `json:"username"`
+		Login    string `json:"login"`
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeMessage(w, http.StatusBadRequest, "Body JSON tidak valid")
 		return
 	}
-	email := strings.TrimSpace(body.Email)
-	if email == "" {
-		writeMessage(w, http.StatusBadRequest, "Email wajib diisi")
-		return
+	loginID := strings.TrimSpace(body.Login)
+	if loginID == "" {
+		loginID = strings.TrimSpace(body.Email)
 	}
-	if !emailOK(email) {
-		writeMessage(w, http.StatusBadRequest, "Format email tidak valid")
+	if loginID == "" {
+		loginID = strings.TrimSpace(body.Username)
+	}
+	if loginID == "" {
+		writeMessage(w, http.StatusBadRequest, "Email atau username wajib diisi")
 		return
 	}
 	if body.Password == "" {
@@ -34,23 +38,25 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeMessage(w, http.StatusBadRequest, "Password minimal 6 karakter")
 		return
 	}
-	user, err := s.Store.Login(r.Context(), email, body.Password)
+	user, err := s.Store.Login(r.Context(), loginID, body.Password)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	token, err := auth.Sign(s.Secret, user.ID, user.Role, time.Now().Add(s.TokenTTL))
-	if err != nil {
-		writeMessage(w, http.StatusInternalServerError, "Terjadi kesalahan server")
+	if len(user.MenuAccess) == 0 {
+		writeMessage(w, http.StatusForbidden, "Akun belum memiliki akses menu")
 		return
 	}
+	token := auth.IssueToken(s.TokenSecret, user.ID, 12*time.Hour)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": map[string]string{
-			"id":    user.ID,
-			"name":  user.Name,
-			"email": user.Email,
-			"role":  user.Role,
-		},
 		"token": token,
+		"user": map[string]any{
+			"id":         user.ID,
+			"name":       user.Name,
+			"email":      user.Email,
+			"username":   user.Username,
+			"role":       user.Role,
+			"menuAccess": user.MenuAccess,
+		},
 	})
 }

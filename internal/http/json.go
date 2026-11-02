@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -32,6 +33,7 @@ func writeError(w http.ResponseWriter, err error) {
 		writeMessage(w, se.Status, se.Message)
 		return
 	}
+	slog.Error("api error", "err", err)
 	writeMessage(w, http.StatusInternalServerError, "Terjadi kesalahan server")
 }
 
@@ -171,6 +173,7 @@ type productJSON struct {
 	Description        string   `json:"description"`
 	Price              int64    `json:"price"`
 	Stock              int32    `json:"stock"`
+	WarehouseStock     int32    `json:"warehouseStock"`
 	Category           string   `json:"category"`
 	Image              *string  `json:"image,omitempty"`
 	SKU                string   `json:"sku"`
@@ -186,6 +189,7 @@ type productJSON struct {
 func productToJSON(p domain.Product) productJSON {
 	return productJSON{
 		ID: p.ID, Name: p.Name, Description: p.Description, Price: p.Price, Stock: p.Stock,
+		WarehouseStock: p.WarehouseStock,
 		Category: p.Category, Image: p.Image, SKU: p.SKU, Rating: p.Rating,
 		IsBestSeller: p.IsBestSeller, IsCustomerFavorite: p.IsCustomerFavorite,
 		Badge: p.Badge, MinStock: p.MinStock, CreatedAt: iso(p.CreatedAt), UpdatedAt: iso(p.UpdatedAt),
@@ -193,16 +197,17 @@ func productToJSON(p domain.Product) productJSON {
 }
 
 type userJSON struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Username  string  `json:"username"`
-	Email     string  `json:"email"`
-	Phone     *string `json:"phone,omitempty"`
-	Role      string  `json:"role"`
-	Status    string  `json:"status"`
-	Avatar    *string `json:"avatar,omitempty"`
-	CreatedAt string  `json:"createdAt"`
-	LastLogin *string `json:"lastLogin,omitempty"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Username   string   `json:"username"`
+	Email      string   `json:"email"`
+	Phone      *string  `json:"phone,omitempty"`
+	Role       string   `json:"role"`
+	Status     string   `json:"status"`
+	Avatar     *string  `json:"avatar,omitempty"`
+	MenuAccess []string `json:"menuAccess"`
+	CreatedAt  string   `json:"createdAt"`
+	LastLogin  *string  `json:"lastLogin,omitempty"`
 }
 
 func userToJSON(u domain.ManagedUser) userJSON {
@@ -211,9 +216,14 @@ func userToJSON(u domain.ManagedUser) userJSON {
 		value := iso(*u.LastLogin)
 		last = &value
 	}
+	menus := u.MenuAccess
+	if menus == nil {
+		menus = []string{}
+	}
 	return userJSON{
 		ID: u.ID, Name: u.Name, Username: u.Username, Email: u.Email, Phone: u.Phone,
-		Role: u.Role, Status: u.Status, Avatar: u.Avatar, CreatedAt: iso(u.CreatedAt), LastLogin: last,
+		Role: u.Role, Status: u.Status, Avatar: u.Avatar, MenuAccess: menus,
+		CreatedAt: iso(u.CreatedAt), LastLogin: last,
 	}
 }
 

@@ -21,10 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	scryptHash = "scrypt$0123456789abcdef0123456789abcdef$7bfc2ad8e90d7252b24c322d25a3ef314bb6f3b0ad29738a3140d921aa2606024e5f3f7eef2b45dfb16dd5428705bb539af7384b2504308175cc714be9c428bf"
-	tokenKey   = "test-token-secret"
-)
+const scryptHash = "scrypt$0123456789abcdef0123456789abcdef$7bfc2ad8e90d7252b24c322d25a3ef314bb6f3b0ad29738a3140d921aa2606024e5f3f7eef2b45dfb16dd5428705bb539af7384b2504308175cc714be9c428bf"
 
 func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -185,7 +182,7 @@ func reset(t *testing.T) {
 func server(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer((&httpapi.Server{
-		Store: shared, Secret: []byte(tokenKey), TokenTTL: time.Hour, Timeout: 10 * time.Second,
+		Store: shared, Timeout: 10 * time.Second,
 	}).Router())
 }
 
@@ -274,11 +271,10 @@ func TestLoginExistingScryptHash(t *testing.T) {
 	if user["id"] != "user-admin" || user["role"] != "admin" || user["email"] != "admin@half.test" {
 		t.Fatalf("user %#v", user)
 	}
-	token, _ := body["token"].(string)
-	if token == "" || !strings.Contains(token, ".") {
-		t.Fatalf("token tidak ditandatangani: %q", token)
+	if _, ok := body["token"]; ok {
+		t.Fatal("respons login masih memuat token")
 	}
-	res, body = doJSON(t, ts, http.MethodPost, "/api/products", token, map[string]any{
+	res, body = doJSON(t, ts, http.MethodPost, "/api/products", "", map[string]any{
 		"name": "Kue Coklat", "sku": "SKU-NEW", "price": 15000, "stock": 3,
 		"category": "Cake", "description": "",
 	})
@@ -309,7 +305,7 @@ func TestLoginExistingScryptHash(t *testing.T) {
 	}
 
 	res, _ = doJSON(t, ts, http.MethodGet, "/api/products", "", nil)
-	if res.StatusCode != http.StatusUnauthorized {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("tanpa token: %d", res.StatusCode)
 	}
 }
@@ -565,8 +561,7 @@ func login(t *testing.T, ts *httptest.Server, email string) string {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("login %s: %d %#v", email, res.StatusCode, body)
 	}
-	token, _ := body["token"].(string)
-	return token
+	return ""
 }
 
 func orderBody(cashier, productID, name string, qty int, price int64) map[string]any {

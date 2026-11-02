@@ -4,16 +4,18 @@ API HTTP kasir HALF POS. Satu binary Go, query PostgreSQL lewat sqlc dan pgx.
 
 ## Menjalankan
 
+Go 1.27.2 dipasang di `.tools/go` (tidak ikut commit). `make` memasangnya bila folder itu belum ada.
+
 ```bash
 export DATABASE_URL='postgres://user:pass@localhost:5432/halfpos?sslmode=disable'
-export HTTP_ADDR=':8080'
-export TOKEN_SECRET='ganti-dengan-rahasia-panjang'
-go run ./cmd/api
+make run
 ```
+
+`HTTP_ADDR` default-nya `:8080`. Variabel yang sama boleh ditaruh di file `.env` di root proyek; file itu tidak di-commit. Endpoint tidak memakai token.
 
 Database PostgreSQL 14+ sudah memakai skema yang ada. Layanan ini tidak membuat tabel baru dan tidak mengubah arti kolom.
 
-Pool memakai `DB_MIN_CONNS` (default 2), `DB_MAX_CONNS` (default 20), dan `DB_MAX_CONN_LIFETIME` (default `30m`). Token HMAC kedaluwarsa mengikuti `TOKEN_TTL` (default `24h`).
+Pool memakai `DB_MIN_CONNS` (default 2), `DB_MAX_CONNS` (default 20), dan `DB_MAX_CONN_LIFETIME` (default `30m`).
 
 ## sqlc
 

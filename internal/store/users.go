@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"halfpos/internal/auth"
@@ -15,25 +16,42 @@ import (
 
 const dummyPasswordHash = "scrypt$0123456789abcdef0123456789abcdef$7bfc2ad8e90d7252b24c322d25a3ef314bb6f3b0ad29738a3140d921aa2606024e5f3f7eef2b45dfb16dd5428705bb539af7384b2504308175cc714be9c428bf"
 
-func (s *Store) Login(ctx context.Context, email, password string) (domain.AuthUser, error) {
-	row, err := New(s.pool).GetUserAuth(ctx, email)
+func (s *Store) Login(ctx context.Context, loginID, password string) (domain.AuthUser, error) {
+	loginID = strings.TrimSpace(loginID)
+	var (
+		id, name, email, username, role, status, passwordHash string
+		menuAccess []string
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, email, username, role, status, password_hash, COALESCE(menu_access, '{}')
+		FROM users
+		WHERE lower(email) = lower($1) OR lower(username) = lower($1)
+		LIMIT 1
+	`, loginID).Scan(&id, &name, &email, &username, &role, &status, &passwordHash, &menuAccess)
 	if errors.Is(err, pgx.ErrNoRows) {
 		auth.VerifyPassword(password, dummyPasswordHash)
-		return domain.AuthUser{}, Unauthorized("Email atau password salah")
+		return domain.AuthUser{}, Unauthorized("Username atau password salah")
 	}
 	if err != nil {
 		return domain.AuthUser{}, err
 	}
-	if !auth.VerifyPassword(password, row.PasswordHash) {
-		return domain.AuthUser{}, Unauthorized("Email atau password salah")
+	if !auth.VerifyPassword(password, passwordHash) {
+		return domain.AuthUser{}, Unauthorized("Username atau password salah")
 	}
-	if row.Status != "active" {
+	if status != "active" {
 		return domain.AuthUser{}, Unauthorized("Akun tidak aktif")
 	}
-	if err := New(s.pool).TouchLastLogin(ctx, row.ID); err != nil {
+	menus := NormalizeMenuAccess(role, menuAccess)
+	// Persist default jika kosong agar konsisten setelah login
+	if len(menuAccess) == 0 {
+		_, _ = s.pool.Exec(ctx, `UPDATE users SET menu_access = $2 WHERE id = $1`, id, menus)
+	}
+	if err := New(s.pool).TouchLastLogin(ctx, id); err != nil {
 		return domain.AuthUser{}, err
 	}
-	return domain.AuthUser{ID: row.ID, Name: row.Name, Email: row.Email, Role: row.Role}, nil
+	return domain.AuthUser{
+		ID: id, Name: name, Email: email, Username: username, Role: role, MenuAccess: menus,
+	}, nil
 }
 
 func (s *Store) ListUsers(ctx context.Context, filter domain.UserFilter) (domain.UserPage, error) {
@@ -64,9 +82,15 @@ func (s *Store) ListUsers(ctx context.Context, filter domain.UserFilter) (domain
 		return domain.UserPage{}, err
 	}
 	out := make([]domain.ManagedUser, 0, len(items))
+	ids := make([]string, 0, len(items))
 	for _, row := range items {
 		out = append(out, mapUserRow(row.ID, row.Name, row.Username, row.Email, row.Phone, row.Role, row.Status, row.Avatar, row.CreatedAt, row.LastLogin))
+		ids = append(ids, row.ID)
 	}
+	if err := s.attachMenuAccess(ctx, out); err != nil {
+		return domain.UserPage{}, err
+	}
+	_ = ids
 	return domain.UserPage{Data: out, Total: total, Limit: limit, Offset: filter.Offset}, nil
 }
 
@@ -90,8 +114,13 @@ func (s *Store) GetUser(ctx context.Context, id string, activityLimit int32, cur
 	if err != nil {
 		return domain.UserDetail{}, err
 	}
+	user := mapUserRow(row.ID, row.Name, row.Username, row.Email, row.Phone, row.Role, row.Status, row.Avatar, row.CreatedAt, row.LastLogin)
+	list := []domain.ManagedUser{user}
+	if err := s.attachMenuAccess(ctx, list); err != nil {
+		return domain.UserDetail{}, err
+	}
 	return domain.UserDetail{
-		User:       mapUserRow(row.ID, row.Name, row.Username, row.Email, row.Phone, row.Role, row.Status, row.Avatar, row.CreatedAt, row.LastLogin),
+		User:       list[0],
 		Activities: activities,
 	}, nil
 }
@@ -124,7 +153,12 @@ func (s *Store) CreateUser(ctx context.Context, in domain.CreateUserInput) (doma
 		}); err != nil {
 			return err
 		}
+		menus := NormalizeMenuAccess(in.Role, in.MenuAccess)
+		if _, err := q.db.Exec(ctx, `UPDATE users SET menu_access = $2 WHERE id = $1`, row.ID, menus); err != nil {
+			return err
+		}
 		created = mapUserRow(row.ID, row.Name, row.Username, row.Email, row.Phone, row.Role, row.Status, row.Avatar, row.CreatedAt, row.LastLogin)
+		created.MenuAccess = menus
 		return nil
 	})
 	if mapped := mapUnique(err); mapped != nil {
@@ -177,7 +211,12 @@ func (s *Store) UpdateUser(ctx context.Context, id string, in domain.UpdateUserI
 		}); err != nil {
 			return err
 		}
+		menus := NormalizeMenuAccess(in.Role, in.MenuAccess)
+		if _, err := q.db.Exec(ctx, `UPDATE users SET menu_access = $2 WHERE id = $1`, id, menus); err != nil {
+			return err
+		}
 		updated = mapUserRow(row.ID, row.Name, row.Username, row.Email, row.Phone, row.Role, row.Status, row.Avatar, row.CreatedAt, row.LastLogin)
+		updated.MenuAccess = menus
 		return nil
 	})
 	if mapped := mapUnique(err); mapped != nil {
@@ -259,6 +298,52 @@ func (s *Store) DeleteUser(ctx context.Context, id string) error {
 		return NotFound("User tidak ditemukan")
 	}
 	return nil
+}
+
+
+func (s *Store) attachMenuAccess(ctx context.Context, users []domain.ManagedUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]string, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, role, COALESCE(menu_access, '{}') FROM users WHERE id = ANY($1)
+	`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byID := map[string][]string{}
+	for rows.Next() {
+		var id, role string
+		var menus []string
+		if err := rows.Scan(&id, &role, &menus); err != nil {
+			return err
+		}
+		byID[id] = NormalizeMenuAccess(role, menus)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range users {
+		if menus, ok := byID[users[i].ID]; ok {
+			users[i].MenuAccess = menus
+		} else {
+			users[i].MenuAccess = DefaultMenuAccess(users[i].Role)
+		}
+	}
+	return nil
+}
+
+func (s *Store) WriteAccessAudit(ctx context.Context, userID, actorID, actorName, action, detail string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO user_access_audits (id, user_id, actor_id, actor_name, action, detail)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, newID("uaa-"), userID, actorID, actorName, action, detail)
+	return err
 }
 
 func mapUserRow(id, name, username, email string, phone *string, role, status string, avatar *string, created, last pgtype.Timestamptz) domain.ManagedUser {
